@@ -33,7 +33,6 @@ type Config struct {
 	KeyFile            string   `json:"key_file"`
 	APIBase            string   `json:"api_base"`
 	Models             []string `json:"models"`
-	MaxRounds          int      `json:"max_rounds"`
 	MaxToolCalls       int      `json:"max_tool_calls"`
 	MaxContent         int      `json:"max_content_chars"`
 	CacheSeconds       int      `json:"cache_seconds"`
@@ -123,9 +122,6 @@ func NewEngine(config Config, call HostCall) (*Engine, error) {
 	if config.APIBase != "https://api.deepseek.com" && !config.AllowTestAPI {
 		return nil, fmt.Errorf("non-DeepSeek API base requires isolated test mode")
 	}
-	if config.MaxRounds == 0 {
-		config.MaxRounds = 6
-	}
 	if config.MaxToolCalls == 0 {
 		config.MaxToolCalls = 8
 	}
@@ -147,8 +143,8 @@ func NewEngine(config Config, call HostCall) (*Engine, error) {
 	if config.MaxStateEntries < 1 || config.MaxStateBytes < 1<<20 {
 		return nil, fmt.Errorf("invalid conversation state memory bounds")
 	}
-	if config.MaxRounds < 1 || config.MaxRounds > 12 || config.MaxToolCalls < 1 || config.MaxToolCalls > 32 {
-		return nil, fmt.Errorf("invalid tool round/call budget")
+	if config.MaxToolCalls < 1 || config.MaxToolCalls > 32 {
+		return nil, fmt.Errorf("invalid tool call budget")
 	}
 	info, err := os.Stat(config.KeyFile)
 	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 {
@@ -615,7 +611,7 @@ func (e *Engine) Execute(request Execution, render *Renderer) (Object, error) {
 	visibleText := ""
 	callsCount := 0
 	retriedOwnedChoice := false
-	for round := 0; round < e.cfg.MaxRounds; round++ {
+	for {
 		key := "input"
 		if chat {
 			key = "messages"
@@ -740,7 +736,6 @@ func (e *Engine) Execute(request Execution, render *Renderer) (Object, error) {
 			delete(body, "tool_choice")
 		}
 	}
-	return nil, &RPCError{Message: "gateway tool round budget exceeded", HTTPStatus: 429}
 }
 
 func adaptTextToolCallHistory(chat bool, nativeOutput []any, call Object, cleaned string) []any {

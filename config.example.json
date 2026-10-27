@@ -14,7 +14,6 @@
   "text_tool_call_models": [
     "naive-n0.5-flash"
   ],
-  "max_rounds": 6,
   "max_tool_calls": 8,
   "max_content_chars": 10000,
   "cache_seconds": 300,

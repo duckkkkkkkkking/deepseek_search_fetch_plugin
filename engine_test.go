@@ -126,6 +126,41 @@ func TestSearchFetchLoopPreservesFieldsAndHidesTools(t *testing.T) {
 	}
 }
 
+func TestContinuationRoundsAreNotCapped(t *testing.T) {
+	const continuationRounds = 14
+	modelRound := 0
+	httpCalls := 0
+	e := testEngine(t, func(method string, _ any, target any) error {
+		switch method {
+		case "host.model.execute":
+			modelRound++
+			if modelRound <= continuationRounds {
+				id := "search-" + string(rune('a'+modelRound))
+				return modelReturn(response(toolCall(searchName, id, Object{"query": "round " + id})), target)
+			}
+			return modelReturn(response(textItem("completed after many rounds")), target)
+		case "host.http.do":
+			httpCalls++
+			return httpReturn(Object{"results": []any{}}, target)
+		case "host.log":
+			return nil
+		default:
+			t.Errorf("unexpected callback %s", method)
+		}
+		return nil
+	})
+	e.cfg.MaxToolCalls = continuationRounds
+
+	reply, err := e.Execute(execution(Object{"model": "test-model", "input": "keep searching"}), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, text, _ := unpackReply(reply, false)
+	if text != "completed after many rounds" || modelRound != continuationRounds+1 || httpCalls != continuationRounds {
+		t.Fatalf("rounds=%d http_calls=%d text=%q", modelRound, httpCalls, text)
+	}
+}
+
 func TestMixedClientToolContinuationAndTenantIsolation(t *testing.T) {
 	modelRound := 0
 	httpCalls := 0
