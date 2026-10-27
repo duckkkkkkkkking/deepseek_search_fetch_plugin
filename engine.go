@@ -33,11 +33,6 @@ type Config struct {
 	KeyFile            string   `json:"key_file"`
 	APIBase            string   `json:"api_base"`
 	Models             []string `json:"models"`
-	MaxContent         int      `json:"max_content_chars"`
-	CacheSeconds       int      `json:"cache_seconds"`
-	StateSeconds       int      `json:"state_seconds"`
-	MaxStateEntries    int      `json:"max_state_entries"`
-	MaxStateBytes      int64    `json:"max_state_bytes"`
 	AllowTestAPI       bool     `json:"allow_test_api"`
 	AutoChoiceModels   []string `json:"auto_choice_models"`
 	ExcludedModels     []string `json:"excluded_models"`
@@ -66,29 +61,18 @@ type modelResponse struct {
 }
 
 type contextState struct {
-	Owner    string
-	Model    string
-	History  []any
-	Expires  time.Time
-	LastUsed time.Time
-	Bytes    int64
-}
-
-type cachedResult struct {
-	Value   Object
-	Expires time.Time
+	Owner   string
+	Model   string
+	History []any
 }
 
 type Engine struct {
-	cfg     Config
-	key     string
-	call    HostCall
-	mu      sync.Mutex
-	states  map[string]*contextState
-	cache   map[string]cachedResult
-	closed  bool
-	lastAPI time.Time
-	now     func() time.Time
+	cfg    Config
+	key    string
+	call   HostCall
+	mu     sync.Mutex
+	states map[string]*contextState
+	closed bool
 }
 
 func loadConfig(rawYAML []byte) (Config, error) {
@@ -121,24 +105,6 @@ func NewEngine(config Config, call HostCall) (*Engine, error) {
 	if config.APIBase != "https://api.deepseek.com" && !config.AllowTestAPI {
 		return nil, fmt.Errorf("non-DeepSeek API base requires isolated test mode")
 	}
-	if config.MaxContent == 0 {
-		config.MaxContent = 10000
-	}
-	if config.CacheSeconds == 0 {
-		config.CacheSeconds = 300
-	}
-	if config.StateSeconds == 0 {
-		config.StateSeconds = 1800
-	}
-	if config.MaxStateEntries == 0 {
-		config.MaxStateEntries = 512
-	}
-	if config.MaxStateBytes == 0 {
-		config.MaxStateBytes = 64 << 20
-	}
-	if config.MaxStateEntries < 1 || config.MaxStateBytes < 1<<20 {
-		return nil, fmt.Errorf("invalid conversation state memory bounds")
-	}
 	info, err := os.Stat(config.KeyFile)
 	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 {
 		return nil, fmt.Errorf("key_file must be a private regular file (mode 600 or stricter)")
@@ -148,8 +114,8 @@ func NewEngine(config Config, call HostCall) (*Engine, error) {
 		return nil, fmt.Errorf("cannot read DeepSeek key")
 	}
 	return &Engine{
-		cfg: config, key: strings.TrimSpace(string(key)), call: call, now: time.Now,
-		states: make(map[string]*contextState), cache: make(map[string]cachedResult),
+		cfg: config, key: strings.TrimSpace(string(key)), call: call,
+		states: make(map[string]*contextState),
 	}, nil
 }
 
@@ -157,7 +123,6 @@ func (e *Engine) Close() {
 	e.mu.Lock()
 	e.closed = true
 	e.states = make(map[string]*contextState)
-	e.cache = make(map[string]cachedResult)
 	e.mu.Unlock()
 }
 
@@ -362,9 +327,6 @@ func (e *Engine) restore(request Execution, body Object, chat bool) ([]any, erro
 	}
 	e.mu.Lock()
 	state, exists := e.states[lookup]
-	if exists {
-		state.LastUsed = e.now()
-	}
 	e.mu.Unlock()
 	if !exists {
 		if str(body["previous_response_id"]) != "" {
@@ -374,9 +336,6 @@ func (e *Engine) restore(request Execution, body Object, chat bool) ([]any, erro
 	}
 	if state.Owner == "" || state.Owner != owner(request.Headers) || state.Model != request.Model {
 		return nil, &RPCError{Message: "gateway conversation state belongs to a different client or model", HTTPStatus: 403}
-	}
-	if !e.now().Before(state.Expires) {
-		return nil, &RPCError{Message: "gateway conversation state expired; resend full conversation", HTTPStatus: 400}
 	}
 	delete(body, "previous_response_id")
 	return append(array(clone(state.History)), history[start:]...), nil
@@ -389,51 +348,10 @@ func (e *Engine) remember(request Execution, id string, external []Object, histo
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	now := e.now()
-	unique := make(map[*contextState]struct{})
-	for key, state := range e.states {
-		if !now.Before(state.Expires) {
-			delete(e.states, key)
-		} else {
-			unique[state] = struct{}{}
-		}
-	}
-	raw, _ := json.Marshal(history)
-	if len(raw) == 0 || int64(len(raw)) > e.cfg.MaxStateBytes {
-		return
-	}
-	state := &contextState{Owner: client, Model: request.Model, History: array(clone(history)),
-		Expires:  now.Add(time.Duration(e.cfg.StateSeconds) * time.Second),
-		LastUsed: now, Bytes: int64(len(raw))}
+	state := &contextState{Owner: client, Model: request.Model, History: array(clone(history))}
 	e.states[id] = state
 	for _, call := range external {
 		e.states[str(call["call_id"])] = state
-		unique[state] = struct{}{}
-	}
-	unique[state] = struct{}{}
-	for {
-		totalBytes := int64(0)
-		for current := range unique {
-			totalBytes += current.Bytes
-		}
-		if len(unique) <= e.cfg.MaxStateEntries && totalBytes <= e.cfg.MaxStateBytes {
-			break
-		}
-		var oldest *contextState
-		for current := range unique {
-			if oldest == nil || current.LastUsed.Before(oldest.LastUsed) {
-				oldest = current
-			}
-		}
-		if oldest == nil || oldest == state {
-			break
-		}
-		for key, current := range e.states {
-			if current == oldest {
-				delete(e.states, key)
-			}
-		}
-		delete(unique, oldest)
 	}
 }
 
@@ -492,18 +410,11 @@ func (e *Engine) executeTool(request Execution, call Object) (Object, error) {
 		return nil, fmt.Errorf("attempt to execute a client-owned tool")
 	}
 	raw, _ := json.Marshal(body)
-	hash := sha256.Sum256(append([]byte(path), raw...))
-	cacheKey := hex.EncodeToString(hash[:])
 	e.mu.Lock()
-	cached, exists := e.cache[cacheKey]
 	closed := e.closed
 	e.mu.Unlock()
 	if closed {
 		return nil, fmt.Errorf("plugin is shutting down")
-	}
-	if exists && e.now().Before(cached.Expires) {
-		e.audit(request, name, true)
-		return object(clone(cached.Value)), nil
 	}
 	var reply struct {
 		StatusCode int
@@ -530,31 +441,21 @@ func (e *Engine) executeTool(request Execution, call Object) (Object, error) {
 		for _, item := range array(value["results"]) {
 			row := object(item)
 			rows = append(rows, Object{"title": row["title"], "url": row["url"], "date": row["date"],
-				"summary": clip(str(row["summary"]), 2500), "authority": row["authority"]})
+				"summary": row["summary"], "authority": row["authority"]})
 		}
 		result["results"] = rows
 	} else {
 		result["title"] = value["title"]
-		result["content"] = clip(str(value["content"]), e.cfg.MaxContent)
+		result["content"] = value["content"]
 	}
-	e.mu.Lock()
-	for key, entry := range e.cache {
-		if !e.now().Before(entry.Expires) {
-			delete(e.cache, key)
-		}
-	}
-	if len(e.cache) < 500 {
-		e.cache[cacheKey] = cachedResult{Value: object(clone(result)), Expires: e.now().Add(time.Duration(e.cfg.CacheSeconds) * time.Second)}
-	}
-	e.mu.Unlock()
-	e.audit(request, name, false)
+	e.audit(request, name)
 	return result, nil
 }
 
-func (e *Engine) audit(request Execution, name string, cacheHit bool) {
+func (e *Engine) audit(request Execution, name string) {
 	_ = e.call("host.log", Object{"host_callback_id": request.CallbackID, "level": "info",
-		"message": fmt.Sprintf("deepseek-search tool completed response_id=%s tool=%s cache_hit=%t", request.LogID, name, cacheHit), "fields": Object{
-			"tool": name, "cache_hit": cacheHit, "model": request.Model, "response_id": request.LogID,
+		"message": fmt.Sprintf("deepseek-search tool completed response_id=%s tool=%s", request.LogID, name), "fields": Object{
+			"tool": name, "model": request.Model, "response_id": request.LogID,
 		}}, nil)
 }
 

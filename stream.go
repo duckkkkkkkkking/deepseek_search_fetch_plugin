@@ -241,9 +241,6 @@ func (p *sseParser) Feed(raw []byte, handle func(Object) error) error {
 		}
 	}
 	p.pending = append(p.pending, raw...)
-	if len(p.pending) > 8*1024*1024 {
-		return fmt.Errorf("upstream SSE frame exceeds plugin size limit")
-	}
 	p.pending = bytes.ReplaceAll(p.pending, []byte("\r\n"), []byte("\n"))
 	if value, ok := standaloneSSE(p.pending); ok {
 		p.pending = nil

@@ -7,7 +7,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 )
 
 func copyInto(value any, target any) error {
@@ -289,7 +288,22 @@ func TestFetchPolicyAndUnicodeQuery(t *testing.T) {
 	}
 }
 
-func TestToolCacheAndStateExpiry(t *testing.T) {
+func TestFetchedContentIsNotTruncated(t *testing.T) {
+	content := strings.Repeat("x", 20000)
+	e := testEngine(t, func(method string, _ any, target any) error {
+		if method == "host.http.do" {
+			return httpReturn(Object{"title": "long page", "content": content}, target)
+		}
+		return nil
+	})
+	result, err := e.executeTool(execution(Object{}), toolCall(fetchName, "fetch", Object{
+		"url": "https://example.com/long-page"}))
+	if err != nil || result["content"] != content {
+		t.Fatal("fetched content was truncated", err, len(str(result["content"])))
+	}
+}
+
+func TestRepeatedToolCallAndStatePersistence(t *testing.T) {
 	httpCalls := 0
 	e := testEngine(t, func(method string, _ any, target any) error {
 		if method == "host.http.do" {
@@ -299,19 +313,20 @@ func TestToolCacheAndStateExpiry(t *testing.T) {
 		return nil
 	})
 	call := toolCall(searchName, "id", Object{"query": "fixed query"})
-	if _, err := e.executeTool(execution(Object{}), call); err != nil {
-		t.Fatal(err)
+	for index := 0; index < 3; index++ {
+		if _, err := e.executeTool(execution(Object{}), call); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if _, err := e.executeTool(execution(Object{}), call); err != nil || httpCalls != 1 {
-		t.Fatal("cache did not suppress repeated API request")
+	if httpCalls != 3 {
+		t.Fatal("repeated tool calls were suppressed", httpCalls)
 	}
-	clock := time.Unix(100, 0)
-	e.now = func() time.Time { return clock }
 	req := execution(Object{})
 	e.remember(req, "previous-id", nil, []any{Object{"role": "user", "content": "history"}})
-	clock = clock.Add(2 * time.Hour)
-	if _, err := e.restore(req, Object{"previous_response_id": "previous-id", "input": "new message"}, false); err == nil {
-		t.Fatal("expired conversation state accepted")
+	history, err := e.restore(req, Object{"previous_response_id": "previous-id", "input": []any{
+		Object{"role": "user", "content": "new message"}}}, false)
+	if err != nil || len(history) != 2 {
+		t.Fatal("conversation state was not retained", err, len(history))
 	}
 }
 
@@ -406,7 +421,7 @@ func TestSSEParserSplitFrames(t *testing.T) {
 	}
 }
 
-func TestConcurrentPublicCacheAndPrivateState(t *testing.T) {
+func TestConcurrentToolAndStateAccess(t *testing.T) {
 	e := testEngine(t, func(method string, _ any, target any) error {
 		if method == "host.http.do" {
 			return httpReturn(Object{"results": []any{}}, target)
@@ -794,38 +809,21 @@ func TestNaiveTextToolCallWorksOnChatProtocol(t *testing.T) {
 	}
 }
 
-func TestConversationStateMemoryAndLRUBounds(t *testing.T) {
-	clock := time.Unix(100, 0)
+func TestConversationStateHasNoEvictionOrSizeCap(t *testing.T) {
 	e := testEngine(t, func(string, any, any) error { return nil })
-	e.now = func() time.Time { return clock }
-	e.cfg.MaxStateEntries = 2
-	e.cfg.MaxStateBytes = 1 << 20
 	request := execution(Object{})
 	for _, id := range []string{"oldest", "middle", "newest"} {
 		e.remember(request, id, nil, []any{Object{"role": "user", "content": id}})
-		clock = clock.Add(time.Second)
 	}
-	if len(e.states) != 2 {
-		t.Fatal("state entry bound not enforced", len(e.states))
-	}
-	if _, exists := e.states["oldest"]; exists {
-		t.Fatal("oldest state was not evicted")
-	}
-	if _, exists := e.states["middle"]; !exists {
-		t.Fatal("unexpected state eviction")
-	}
-	if _, exists := e.states["newest"]; !exists {
-		t.Fatal("newest state missing")
-	}
-	// A single oversized context is not retained; the caller receives a
-	// recoverable "resend full conversation" error if it later uses its ID.
-	large := strings.Repeat("x", (1<<20)+100)
+	large := strings.Repeat("x", 2<<20)
 	e.remember(request, "oversized", nil, []any{Object{"role": "user", "content": large}})
-	if _, exists := e.states["oversized"]; exists {
-		t.Fatal("oversized state bypassed byte bound")
+	if len(e.states) != 4 {
+		t.Fatal("conversation state was evicted", len(e.states))
 	}
-	if _, err := e.restore(request, Object{"previous_response_id": "oversized", "input": "next"}, false); err == nil {
-		t.Fatal("missing oversized state did not request full conversation")
+	history, err := e.restore(request, Object{"previous_response_id": "oversized", "input": []any{
+		Object{"role": "user", "content": "next"}}}, false)
+	if err != nil || len(history) != 2 {
+		t.Fatal("large conversation state was discarded", err, len(history))
 	}
 }
 

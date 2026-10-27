@@ -14,10 +14,5 @@
   "text_tool_call_models": [
     "naive-n0.5-flash"
   ],
-  "max_content_chars": 10000,
-  "cache_seconds": 300,
-  "state_seconds": 1800,
-  "max_state_entries": 256,
-  "max_state_bytes": 33554432,
   "allow_test_api": false
 }
