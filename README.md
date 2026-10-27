@@ -23,7 +23,7 @@ tools, custom tools such as `apply_patch`, and their output items.
 - Keeps gateway-owned tool calls out of the public response.
 - Preserves client function/custom tool calls and result round trips.
 - Isolates continuation state by client authorization key and model.
-- Retains continuation state without eviction or size caps.
+- Persists continuation state on disk with configurable TTL and capacity eviction.
 - Applies fetch-URL safety validation.
 - Treats retrieved web content as untrusted source data.
 - Explicitly refuses DeepSeek Pro routing and supports per-site model allowlists.
@@ -52,6 +52,7 @@ Create a private directory for the plugin, key, and settings:
 install -d -m 0755 /opt/cliproxy-setup/deepseek-search-plugin/plugins
 install -d -m 0700 /opt/cliproxy-setup/deepseek-search-plugin/keys
 install -d -m 0700 /opt/cliproxy-setup/deepseek-search-plugin/settings
+install -d -m 0700 /opt/cliproxy-setup/deepseek-search-plugin/state
 install -m 0755 dist/deepseek-search.so \
   /opt/cliproxy-setup/deepseek-search-plugin/plugins/deepseek-search.so
 ```
@@ -79,7 +80,7 @@ Restart the target CLIProxyAPI service after installing or replacing the shared
 library. Confirm the journal reports:
 
 ```text
-plugin registered plugin_id=deepseek-search plugin_name=deepseek-search version=1.0.3
+plugin registered plugin_id=deepseek-search plugin_name=deepseek-search version=1.0.4
 ```
 
 ## Settings
@@ -92,6 +93,9 @@ plugin registered plugin_id=deepseek-search plugin_name=deepseek-search version=
 | `excluded_models` | Explicit deny list. DeepSeek Pro is also rejected structurally. |
 | `auto_choice_models` | Models that reject a forced named tool choice; gateway choices are adapted to `auto` with an explicit instruction. |
 | `text_tool_call_models` | Models that emit a known textual `<tool_call>` format instead of structured tool calls. |
+| `state_dir` | Absolute private directory for disk-backed continuation state. |
+| `state_seconds` | Idle TTL for continuation state; defaults to 12 hours. |
+| `state_max_bytes` | Total disk capacity for continuation state and aliases; defaults to 1 GiB. |
 | `allow_test_api` | Test-only escape hatch for mock API servers; keep `false` in production. |
 
 An individual request can opt out with `tool_choice: "none"` or top-level
@@ -116,8 +120,9 @@ metadata:
   instructions embedded in retrieved pages.
 - Literal loopback, private, link-local, multicast, and credential-bearing fetch
   URLs are rejected. Fetching itself is performed by the DeepSeek remote service.
-- Continuation history is held only in memory and is isolated by authorization
-  key and model.
+- Continuation history is stored only in private `0600` files under `state_dir`.
+  It is isolated by authorization key and model, expires after the configured
+  idle TTL, and evicts the oldest entries when the disk capacity is exceeded.
 - Production configs should use a dedicated DeepSeek key with appropriate
   spending limits and rotate it outside this repository.
 
@@ -133,7 +138,8 @@ The test suite covers:
 - DeepSeek Pro exclusion;
 - URL policy and Unicode query validation;
 - text-form tool-call compatibility;
-- unbounded continuation rounds, tool calls, and retained conversation state;
+- unbounded continuation rounds and tool calls;
+- disk persistence, 12-hour expiry, ownership isolation, and capacity eviction;
 - split/native/vendor SSE parsing;
 - concurrent access under Go's race detector.
 

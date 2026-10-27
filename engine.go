@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
@@ -33,6 +34,9 @@ type Config struct {
 	KeyFile            string   `json:"key_file"`
 	APIBase            string   `json:"api_base"`
 	Models             []string `json:"models"`
+	StateDir           string   `json:"state_dir"`
+	StateSeconds       int      `json:"state_seconds"`
+	StateMaxBytes      int64    `json:"state_max_bytes"`
 	AllowTestAPI       bool     `json:"allow_test_api"`
 	AutoChoiceModels   []string `json:"auto_choice_models"`
 	ExcludedModels     []string `json:"excluded_models"`
@@ -60,19 +64,13 @@ type modelResponse struct {
 	Body    []byte              `json:"body"`
 }
 
-type contextState struct {
-	Owner   string
-	Model   string
-	History []any
-}
-
 type Engine struct {
-	cfg    Config
-	key    string
-	call   HostCall
-	mu     sync.Mutex
-	states map[string]*contextState
-	closed bool
+	cfg        Config
+	key        string
+	call       HostCall
+	mu         sync.Mutex
+	stateStore *diskStateStore
+	closed     bool
 }
 
 func loadConfig(rawYAML []byte) (Config, error) {
@@ -113,17 +111,33 @@ func NewEngine(config Config, call HostCall) (*Engine, error) {
 	if err != nil || len(strings.TrimSpace(string(key))) == 0 {
 		return nil, fmt.Errorf("cannot read DeepSeek key")
 	}
+	stateDir := config.StateDir
+	if stateDir == "" {
+		stateDir = defaultStateDir()
+	}
+	ttlSeconds := config.StateSeconds
+	if ttlSeconds == 0 {
+		ttlSeconds = 12 * 60 * 60
+	}
+	maxBytes := config.StateMaxBytes
+	if maxBytes == 0 {
+		maxBytes = 1 << 30
+	}
+	stateStore, err := openDiskStateStore(stateDir, time.Duration(ttlSeconds)*time.Second, maxBytes)
+	if err != nil {
+		return nil, err
+	}
 	return &Engine{
 		cfg: config, key: strings.TrimSpace(string(key)), call: call,
-		states: make(map[string]*contextState),
+		stateStore: stateStore,
 	}, nil
 }
 
 func (e *Engine) Close() {
 	e.mu.Lock()
 	e.closed = true
-	e.states = make(map[string]*contextState)
 	e.mu.Unlock()
+	e.stateStore.Close()
 }
 
 func safeError(err error) string {
@@ -325,20 +339,20 @@ func (e *Engine) restore(request Execution, body Object, chat bool) ([]any, erro
 	if lookup == "" {
 		return history, nil
 	}
-	e.mu.Lock()
-	state, exists := e.states[lookup]
-	e.mu.Unlock()
-	if !exists {
+	stateHistory, err := e.stateStore.restore(lookup, owner(request.Headers), request.Model)
+	switch {
+	case errors.Is(err, errStateUnavailable):
 		if str(body["previous_response_id"]) != "" {
 			return nil, &RPCError{Message: "gateway response state is unavailable; resend full conversation", HTTPStatus: 400}
 		}
 		return history, nil
-	}
-	if state.Owner == "" || state.Owner != owner(request.Headers) || state.Model != request.Model {
+	case errors.Is(err, errStateForbidden):
 		return nil, &RPCError{Message: "gateway conversation state belongs to a different client or model", HTTPStatus: 403}
+	case err != nil:
+		return nil, fmt.Errorf("read conversation state: %w", err)
 	}
 	delete(body, "previous_response_id")
-	return append(array(clone(state.History)), history[start:]...), nil
+	return append(stateHistory, history[start:]...), nil
 }
 
 func (e *Engine) remember(request Execution, id string, external []Object, history []any) {
@@ -346,12 +360,12 @@ func (e *Engine) remember(request Execution, id string, external []Object, histo
 	if client == "" {
 		return
 	}
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	state := &contextState{Owner: client, Model: request.Model, History: array(clone(history))}
-	e.states[id] = state
-	for _, call := range external {
-		e.states[str(call["call_id"])] = state
+	if err := e.stateStore.remember(id, external, client, request.Model, history); err != nil {
+		_ = e.call("host.log", Object{
+			"host_callback_id": request.CallbackID, "level": "warn",
+			"message": "deepseek-search conversation state persistence failed",
+			"fields":  Object{"model": request.Model, "response_id": id, "error": err.Error()},
+		}, nil)
 	}
 }
 

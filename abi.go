@@ -178,7 +178,7 @@ func dispatch(method string, raw []byte) (any, error) {
 		return map[string]any{
 			"schema_version": 3,
 			"metadata": map[string]any{
-				"Name": "deepseek-search", "Version": "1.0.3", "Author": "duckkkkkkkkking",
+				"Name": "deepseek-search", "Version": "1.0.4", "Author": "duckkkkkkkkking",
 				"GitHubRepository": "https://github.com/duckkkkkkkkking/deepseek_search_fetch_plugin",
 				"Logo":             "https://raw.githubusercontent.com/duckkkkkkkkking/deepseek_search_fetch_plugin/main/assets/logo.svg",
 				"ConfigFields": []any{map[string]any{

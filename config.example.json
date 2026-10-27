@@ -14,5 +14,8 @@
   "text_tool_call_models": [
     "naive-n0.5-flash"
   ],
+  "state_dir": "/opt/cliproxy-setup/deepseek-search-plugin/state/site",
+  "state_seconds": 43200,
+  "state_max_bytes": 1073741824,
   "allow_test_api": false
 }

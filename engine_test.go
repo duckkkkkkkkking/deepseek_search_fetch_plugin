@@ -28,6 +28,7 @@ func testEngine(t *testing.T, call HostCall) *Engine {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(engine.Close)
 	return engine
 }
 
@@ -568,7 +569,7 @@ func TestIdenticalReconfigureKeepsActiveEngine(t *testing.T) {
 	if _, err := dispatch("plugin.reconfigure", request); err != nil {
 		t.Fatal(err)
 	}
-	if pluginState.engine != first || first.closed || len(first.states) != 1 {
+	if pluginState.engine != first || first.closed || !first.stateStore.has("retained-state") {
 		t.Fatal("unchanged reconfigure invalidated active engine/state")
 	}
 }
@@ -806,24 +807,6 @@ func TestNaiveTextToolCallWorksOnChatProtocol(t *testing.T) {
 	}
 	if answer := str(object(object(array(reply["choices"])[0])["message"])["content"]); answer != "chat text-tool answer" {
 		t.Fatal("wrong Chat answer", answer)
-	}
-}
-
-func TestConversationStateHasNoEvictionOrSizeCap(t *testing.T) {
-	e := testEngine(t, func(string, any, any) error { return nil })
-	request := execution(Object{})
-	for _, id := range []string{"oldest", "middle", "newest"} {
-		e.remember(request, id, nil, []any{Object{"role": "user", "content": id}})
-	}
-	large := strings.Repeat("x", 2<<20)
-	e.remember(request, "oversized", nil, []any{Object{"role": "user", "content": large}})
-	if len(e.states) != 4 {
-		t.Fatal("conversation state was evicted", len(e.states))
-	}
-	history, err := e.restore(request, Object{"previous_response_id": "oversized", "input": []any{
-		Object{"role": "user", "content": "next"}}}, false)
-	if err != nil || len(history) != 2 {
-		t.Fatal("large conversation state was discarded", err, len(history))
 	}
 }
 
