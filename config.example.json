@@ -1,0 +1,25 @@
+{
+  "key_file": "/opt/cliproxy-setup/deepseek-search-plugin/keys/deepseek.key",
+  "api_base": "https://api.deepseek.com",
+  "models": [
+    "deepseek-flash",
+    "example-model"
+  ],
+  "excluded_models": [
+    "deepseek-v4-pro-example"
+  ],
+  "auto_choice_models": [
+    "deepseek-flash"
+  ],
+  "text_tool_call_models": [
+    "naive-n0.5-flash"
+  ],
+  "max_rounds": 6,
+  "max_tool_calls": 8,
+  "max_content_chars": 10000,
+  "cache_seconds": 300,
+  "state_seconds": 1800,
+  "max_state_entries": 256,
+  "max_state_bytes": 33554432,
+  "allow_test_api": false
+}

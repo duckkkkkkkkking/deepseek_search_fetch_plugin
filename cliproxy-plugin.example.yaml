@@ -1,0 +1,8 @@
+plugins:
+  enabled: true
+  dir: /opt/cliproxy-setup/deepseek-search-plugin/plugins
+  configs:
+    deepseek-search:
+      enabled: true
+      priority: 100
+      settings_file: /opt/cliproxy-setup/deepseek-search-plugin/settings/site.json

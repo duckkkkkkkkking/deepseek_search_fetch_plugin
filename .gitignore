@@ -1,0 +1,25 @@
+# Build outputs
+dist/
+*.so
+*.dll
+*.dylib
+*.h
+
+# Secrets and deployment state
+*.key
+key
+settings*.json
+deployment.json
+backups/
+
+# Logs and local test artifacts
+*.log
+*.sse
+*.jsonl
+*-results.json
+*-manifest.json
+
+# Editor and OS files
+.DS_Store
+.idea/
+.vscode/
