@@ -126,7 +126,7 @@ func TestSearchFetchLoopPreservesFieldsAndHidesTools(t *testing.T) {
 	}
 }
 
-func TestContinuationRoundsAreNotCapped(t *testing.T) {
+func TestContinuationRoundsAndToolCallsAreNotCapped(t *testing.T) {
 	const continuationRounds = 14
 	modelRound := 0
 	httpCalls := 0
@@ -149,8 +149,6 @@ func TestContinuationRoundsAreNotCapped(t *testing.T) {
 		}
 		return nil
 	})
-	e.cfg.MaxToolCalls = continuationRounds
-
 	reply, err := e.Execute(execution(Object{"model": "test-model", "input": "keep searching"}), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -272,7 +270,6 @@ func TestFetchPolicyAndUnicodeQuery(t *testing.T) {
 	if err := publicURL("https://example.com/article"); err != nil {
 		t.Fatal(err)
 	}
-	count := 0
 	called := false
 	e := testEngine(t, func(method string, _ any, target any) error {
 		if method == "host.http.do" {
@@ -281,18 +278,18 @@ func TestFetchPolicyAndUnicodeQuery(t *testing.T) {
 		}
 		return nil
 	})
-	_, err := e.executeTool(execution(Object{}), toolCall(searchName, "id", Object{"query": strings.Repeat("中", 128)}), &count)
+	_, err := e.executeTool(execution(Object{}), toolCall(searchName, "id", Object{"query": strings.Repeat("中", 128)}))
 	if err != nil || !called {
 		t.Fatal("Unicode query length checked as byte length")
 	}
 	called = false
-	result, err := e.executeTool(execution(Object{}), toolCall(searchName, "id2", Object{"query": strings.Repeat("中", 129)}), &count)
+	result, err := e.executeTool(execution(Object{}), toolCall(searchName, "id2", Object{"query": strings.Repeat("中", 129)}))
 	if err != nil || result["ok"] != false || called {
 		t.Fatal("oversized query was sent upstream")
 	}
 }
 
-func TestToolBudgetCacheAndStateExpiry(t *testing.T) {
+func TestToolCacheAndStateExpiry(t *testing.T) {
 	httpCalls := 0
 	e := testEngine(t, func(method string, _ any, target any) error {
 		if method == "host.http.do" {
@@ -301,17 +298,12 @@ func TestToolBudgetCacheAndStateExpiry(t *testing.T) {
 		}
 		return nil
 	})
-	count := 0
 	call := toolCall(searchName, "id", Object{"query": "fixed query"})
-	if _, err := e.executeTool(execution(Object{}), call, &count); err != nil {
+	if _, err := e.executeTool(execution(Object{}), call); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.executeTool(execution(Object{}), call, &count); err != nil || httpCalls != 1 {
+	if _, err := e.executeTool(execution(Object{}), call); err != nil || httpCalls != 1 {
 		t.Fatal("cache did not suppress repeated API request")
-	}
-	e.cfg.MaxToolCalls = count
-	if _, err := e.executeTool(execution(Object{}), call, &count); err == nil {
-		t.Fatal("tool budget not enforced")
 	}
 	clock := time.Unix(100, 0)
 	e.now = func() time.Time { return clock }
@@ -426,8 +418,7 @@ func TestConcurrentPublicCacheAndPrivateState(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			count := 0
-			_, _ = e.executeTool(execution(Object{}), toolCall(searchName, "id", Object{"query": "shared public query"}), &count)
+			_, _ = e.executeTool(execution(Object{}), toolCall(searchName, "id", Object{"query": "shared public query"}))
 			e.remember(execution(Object{}), randomID("response"), nil, []any{})
 		}()
 	}

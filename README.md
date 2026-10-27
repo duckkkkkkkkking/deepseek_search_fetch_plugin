@@ -25,7 +25,7 @@ tools, custom tools such as `apply_patch`, and their output items.
 - Isolates continuation state by client authorization key and model.
 - Bounds continuation state by entry count and bytes, with LRU eviction.
 - Caches successful public search/fetch results briefly.
-- Applies tool-call, content-size, and fetch-URL limits.
+- Applies content-size and fetch-URL limits.
 - Treats retrieved web content as untrusted source data.
 - Explicitly refuses DeepSeek Pro routing and supports per-site model allowlists.
 
@@ -80,7 +80,7 @@ Restart the target CLIProxyAPI service after installing or replacing the shared
 library. Confirm the journal reports:
 
 ```text
-plugin registered plugin_id=deepseek-search plugin_name=deepseek-search version=1.0.1
+plugin registered plugin_id=deepseek-search plugin_name=deepseek-search version=1.0.2
 ```
 
 ## Settings
@@ -93,7 +93,6 @@ plugin registered plugin_id=deepseek-search plugin_name=deepseek-search version=
 | `excluded_models` | Explicit deny list. DeepSeek Pro is also rejected structurally. |
 | `auto_choice_models` | Models that reject a forced named tool choice; gateway choices are adapted to `auto` with an explicit instruction. |
 | `text_tool_call_models` | Models that emit a known textual `<tool_call>` format instead of structured tool calls. |
-| `max_tool_calls` | Maximum gateway-owned tool executions per client request. |
 | `max_content_chars` | Maximum fetched content returned to a model. |
 | `cache_seconds` | TTL for successful search/fetch results. |
 | `state_seconds` | TTL for conversation continuation state. |
@@ -140,7 +139,7 @@ The test suite covers:
 - DeepSeek Pro exclusion;
 - URL policy and Unicode query validation;
 - text-form tool-call compatibility;
-- cache, tool-call, state-TTL, byte, entry, and LRU bounds;
+- cache, state-TTL, byte, entry, and LRU bounds;
 - split/native/vendor SSE parsing;
 - concurrent access under Go's race detector.
 

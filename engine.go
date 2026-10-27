@@ -33,7 +33,6 @@ type Config struct {
 	KeyFile            string   `json:"key_file"`
 	APIBase            string   `json:"api_base"`
 	Models             []string `json:"models"`
-	MaxToolCalls       int      `json:"max_tool_calls"`
 	MaxContent         int      `json:"max_content_chars"`
 	CacheSeconds       int      `json:"cache_seconds"`
 	StateSeconds       int      `json:"state_seconds"`
@@ -122,9 +121,6 @@ func NewEngine(config Config, call HostCall) (*Engine, error) {
 	if config.APIBase != "https://api.deepseek.com" && !config.AllowTestAPI {
 		return nil, fmt.Errorf("non-DeepSeek API base requires isolated test mode")
 	}
-	if config.MaxToolCalls == 0 {
-		config.MaxToolCalls = 8
-	}
 	if config.MaxContent == 0 {
 		config.MaxContent = 10000
 	}
@@ -142,9 +138,6 @@ func NewEngine(config Config, call HostCall) (*Engine, error) {
 	}
 	if config.MaxStateEntries < 1 || config.MaxStateBytes < 1<<20 {
 		return nil, fmt.Errorf("invalid conversation state memory bounds")
-	}
-	if config.MaxToolCalls < 1 || config.MaxToolCalls > 32 {
-		return nil, fmt.Errorf("invalid tool call budget")
 	}
 	info, err := os.Stat(config.KeyFile)
 	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 {
@@ -462,11 +455,7 @@ func publicURL(raw string) error {
 	return nil
 }
 
-func (e *Engine) executeTool(request Execution, call Object, count *int) (Object, error) {
-	if *count >= e.cfg.MaxToolCalls {
-		return nil, &RPCError{Message: "gateway tool call budget exceeded", HTTPStatus: 429}
-	}
-	*count++
+func (e *Engine) executeTool(request Execution, call Object) (Object, error) {
 	name := str(call["name"])
 	arguments := Object{}
 	if err := json.Unmarshal([]byte(str(call["arguments"])), &arguments); err != nil {
@@ -609,7 +598,6 @@ func (e *Engine) Execute(request Execution, render *Renderer) (Object, error) {
 	request.LogID = id
 	total := Object{"input_tokens": float64(0), "output_tokens": float64(0), "total_tokens": float64(0)}
 	visibleText := ""
-	callsCount := 0
 	retriedOwnedChoice := false
 	for {
 		key := "input"
@@ -675,7 +663,7 @@ func (e *Engine) Execute(request Execution, render *Renderer) (Object, error) {
 			}
 		}
 		for _, call := range owned {
-			result, err := e.executeTool(request, call, &callsCount)
+			result, err := e.executeTool(request, call)
 			if err != nil {
 				return nil, err
 			}
